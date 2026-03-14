@@ -1,0 +1,8 @@
+- name: Install Apache on Group
+  hosts: Web-Server-Apache  # This matches the Group Name you just made
+  become: yes
+  tasks:
+    - name: Ensure apache is installed
+      apt:
+        name: apache2
+        state: present
