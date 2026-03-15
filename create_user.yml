@@ -7,7 +7,7 @@
     - name: Create a new local user
       ansible.windows.win_user:
         name: "JohnDoe"
-        password: "SecretPassword123!"
+        password: "ComplexPassword2026!"
         state: present
         groups:
           - Users
