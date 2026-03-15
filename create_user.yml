@@ -14,4 +14,4 @@
           - Remote Management Users
         groups_action: add  # Ensures user is added to these groups without removing existing ones
         password_never_expires: yes
-        update_password: on_create # Only sets the password if the user is new
+        update_password: always # Only sets the password if the user is new
