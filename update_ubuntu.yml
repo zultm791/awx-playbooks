@@ -1,19 +1,36 @@
 ---
 - name: Update and Upgrade Apt Packages
   hosts: all
-  become: yes  # Required because installing software needs root/sudo privileges
+  become: yes
 
   tasks:
     - name: Update apt cache and upgrade all packages
       ansible.builtin.apt:
-        update_cache: yes    # Equivalent to 'apt-get update'
-        upgrade: dist        # Equivalent to 'apt-get dist-upgrade'
-        cache_valid_time: 3600 # Only updates if the last update was > 1 hour ago
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
 
     - name: Remove unused dependency packages
       ansible.builtin.apt:
-        autoremove: yes      # Equivalent to 'apt-get autoremove'
+        autoremove: yes
 
-    - name: Clean up local repository of retrieved package files
+    - name: Clean up local repository
       ansible.builtin.apt:
-        autoclean: yes       # Equivalent to 'apt-get autoclean'
+        autoclean: yes
+
+    # Step 1: Check if a reboot is actually required
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    # Step 2: Reboot the server only if the file exists
+    - name: Reboot the server
+      ansible.builtin.reboot:
+        msg: "Reboot initiated by Ansible after package updates"
+        connect_timeout: 5
+        reboot_timeout: 300
+        pre_reboot_delay: 0
+        post_reboot_delay: 30
+        test_command: uptime
+      when: reboot_required_file.stat.exists
