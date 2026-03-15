@@ -1,0 +1,19 @@
+---
+- name: Install Telnet on RedHat and Ubuntu
+  hosts: all
+  become: yes  # Required to install software
+
+  tasks:
+    - name: Install telnet package
+      ansible.builtin.package:
+        name: telnet
+        state: present
+
+    - name: Ensure telnet is usable (Optional - check version)
+      ansible.builtin.command: telnet --version
+      register: telnet_check
+      changed_when: false
+
+    - name: Show telnet status
+      ansible.builtin.debug:
+        msg: "Telnet is installed: {{ telnet_check.stdout }}"
