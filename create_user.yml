@@ -1,0 +1,17 @@
+---
+- name: Manage Windows Local Users
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Create a new local user
+      ansible.windows.win_user:
+        name: "JohnDoe"
+        password: "SecretPassword123!"
+        state: present
+        groups:
+          - Users
+          - Remote Management Users
+        groups_action: add  # Ensures user is added to these groups without removing existing ones
+        password_never_expires: yes
+        update_password: on_create # Only sets the password if the user is new
