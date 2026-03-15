@@ -1,0 +1,14 @@
+---
+- name: Reset Windows Local User Password
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Reset password for JohnDoe
+      ansible.windows.win_user:
+        name: "JohnDoe"
+        password: "NewSecurePassword2026!"  # Use a strong, unique password
+        state: present
+        update_password: always             # Forces the update on an existing user
+        password_never_expires: yes
+        password_expired: no                # Ensures they don't have to change it at login
