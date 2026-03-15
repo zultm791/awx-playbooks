@@ -1,0 +1,12 @@
+---
+- name: Reboot Windows Server
+  hosts: all
+  gather_facts: no
+
+  tasks:
+    - name: Trigger a reboot
+      ansible.windows.win_reboot:
+        msg: "Reboot initiated by Ansible"
+        pre_reboot_delay: 0    # Seconds to wait before starting reboot
+        post_reboot_delay: 30  # Seconds to wait after reboot before continuing
+        reboot_timeout: 600    # Maximum seconds to wait for the server to respond
