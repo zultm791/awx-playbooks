@@ -1,14 +1,18 @@
 ---
-- name: Reset Windows Local User Password
+- name: Reset Password and Enable RDP
   hosts: all
   gather_facts: no
 
   tasks:
-    - name: Reset password for JohnDoe
+    - name: Reset password and add to RDP group
       ansible.windows.win_user:
         name: "JohnDoe"
-        password: "NewSecurePassword2026!"  # Use a strong, unique password
+        password: "NewSecurePassword2026!"
         state: present
-        update_password: always             # Forces the update on an existing user
+        update_password: always
         password_never_expires: yes
-        password_expired: no                # Ensures they don't have to change it at login
+        password_expired: no
+        groups:
+          - Remote Desktop Users      # <--- Grants RDP access
+          - Remote Management Users   # <--- Grants WinRM/Ansible access
+        groups_action: add            # Adds to these groups without removing others
