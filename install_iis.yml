@@ -1,18 +1,24 @@
 ---
+---
 - name: Install IIS on Windows servers
   hosts: all
   gather_facts: yes
 
   tasks:
     - name: Install IIS Web-Server
-      win_feature:
+      ansible.windows.win_feature:
         name: Web-Server
         state: present
         include_sub_features: yes
         include_management_tools: yes
+      register: iis_install
+
+    - name: Reboot if IIS installation requires it
+      ansible.windows.win_reboot:
+      when: iis_install.reboot_required
 
     - name: Ensure IIS service is running
-      win_service:
+      ansible.windows.win_service:
         name: W3SVC
         start_mode: auto
         state: started
