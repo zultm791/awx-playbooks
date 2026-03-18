@@ -1,0 +1,10 @@
+---
+- name: Update Red Hat Enterprise Linux
+  hosts: all
+  become: yes
+  tasks:
+    - name: Upgrade all packages via DNF
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_cache: yes
