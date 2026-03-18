@@ -1,5 +1,4 @@
 ---
----
 - name: Update Red Hat Enterprise Linux
   hosts: all
   become: yes
