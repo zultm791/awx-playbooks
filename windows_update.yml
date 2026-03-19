@@ -1,6 +1,6 @@
 ---
 - name: Update Windows Servers
-  hosts: windows
+  hosts: all
   tasks:
     - name: Install all critical and security updates
       ansible.windows.win_updates:
