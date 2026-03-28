@@ -2,12 +2,9 @@
 - name: Initialize master and worker nodes
   hosts: all
   become: yes
-  vars:
-    k8s_version: "v1.30"
-
   tasks:
     - name: Load required kernel modules
-      ansible.builtin.modprobe:
+      modprobe:
         name: "{{ item }}"
         state: present
       loop:
@@ -15,7 +12,7 @@
         - br_netfilter
 
     - name: Persist kernel modules on reboot
-      ansible.builtin.copy:
+      copy:
         dest: /etc/modules-load.d/k8s.conf
         content: |
           overlay
@@ -23,7 +20,7 @@
         mode: '0644'
 
     - name: Configure sysctl for Kubernetes networking
-      ansible.posix.sysctl:
+      sysctl:
         name: "{{ item }}"
         value: '1'
         state: present
@@ -34,73 +31,62 @@
         - net.ipv4.ip_forward
 
     - name: Disable SWAP immediately
-      ansible.builtin.command: swapoff -a
-      when: ansible_swaptotal_mb > 0
+      command: swapoff -a
+      ignore_errors: yes  # Prevents failure if swap is already off
 
     - name: Disable SWAP in fstab
-      ansible.builtin.replace:
+      replace:
         path: /etc/fstab
         regexp: '^([^#].*?\sswap\s+.*)$'
         replace: '# \1'
 
     - name: Install dependencies
-      ansible.builtin.apt:
+      apt:
         name: [apt-transport-https, ca-certificates, curl, gnupg, software-properties-common]
         state: present
         update_cache: yes
 
     - name: Create keyring directory
-      ansible.builtin.file:
+      file:
         path: /etc/apt/keyrings
         state: directory
         mode: '0755'
 
     - name: Add Docker GPG key
-      ansible.builtin.apt_key:
+      apt_key:
         url: https://download.docker.com/linux/ubuntu/gpg
         state: present
 
     - name: Add Docker Repository
-      ansible.builtin.apt_repository:
+      apt_repository:
         repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         state: present
 
     - name: Install containerd
-      ansible.builtin.apt:
+      apt:
         name: containerd.io
         state: present
 
-    - name: Configure containerd (SystemdCgroup)
-      ansible.builtin.shell: |
+    - name: Configure containerd
+      shell: |
         mkdir -p /etc/containerd
         containerd config default > /etc/containerd/config.toml
         sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
       notify: restart containerd
 
-    - name: Add Kubernetes GPG key
-      ansible.builtin.shell: "curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ k8s_version }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg"
-      args:
-        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    - name: Add Kubernetes GPG key and Repo
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
 
-    - name: Add Kubernetes Repository
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ k8s_version }}/deb/ /"
+    - name: Install Kubernetes binaries
+      apt:
+        name: [kubelet, kubeadm, kubectl]
         state: present
         update_cache: yes
 
-    - name: Install Kubernetes binaries
-      ansible.builtin.apt:
-        name: [kubelet, kubeadm, kubectl]
-        state: present
-
-    - name: Hold Kubernetes packages
-      ansible.builtin.dpkg_selections:
-        name: "{{ item }}"
-        selection: hold
-      loop: [kubelet, kubeadm, kubectl]
-
   handlers:
     - name: restart containerd
-      ansible.builtin.service:
+      service:
         name: containerd
         state: restarted
