@@ -1,4 +1,3 @@
-
 ---
 - name: Initialize master and worker nodes
   hosts: all
