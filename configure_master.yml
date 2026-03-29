@@ -3,53 +3,55 @@
   hosts: master_setup_host
   become: true
   tasks:
-    - name: Reset Kubernetes (Clean up previous failed attempts)
+    - name: Reset Kubernetes (Crucial to clear old failed 645MB attempts)
       ansible.builtin.command: kubeadm reset -f
-      register: reset_cluster
-      changed_when: reset_cluster.rc == 0
+      failed_when: false
 
-    - name: Ensure Containerd is configured for CRI v1
+    - name: Ensure Containerd config exists and is fresh
       ansible.builtin.shell: |
         mkdir -p /etc/containerd
         containerd config default > /etc/containerd/config.toml
-        seed=$(grep -n "SystemdCgroup = false" /etc/containerd/config.toml | cut -d: -f1)
-        sed -i "${seed}s/false/true/" /etc/containerd/config.toml
+      # We do this to ensure no old, broken configs are lingering
+
+    - name: Set SystemdCgroup to true in containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
       notify: Restart containerd
 
-    - name: Flush handlers to restart containerd immediately
+    - name: Flush handlers to restart containerd now
       ansible.builtin.meta: flush_handlers
 
-    - name: Initialize K8S cluster
+    - name: Initialize K8S cluster (The 8GB Power Move)
       ansible.builtin.command: >
         kubeadm init 
         --pod-network-cidr=172.16.0.0/16 
-        --apiserver-advertise-address=192.168.100.5 
-        --ignore-preflight-errors=Mem,FileAvailable--etc-kubernetes-manifests-kube-apiserver.yaml
+        --apiserver-advertise-address=192.168.100.5
       register: kubeadm_init
 
-    - name: Setup kubeconfig for the user
+    - name: Create .kube directory for zultahir
       ansible.builtin.file:
-        path: "/home/{{ ansible_user }}/.kube"
+        path: "/home/zultahir/.kube"
         state: directory
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
+        owner: zultahir
+        group: zultahir
         mode: '0755'
 
-    - name: Copy admin.conf to user's kube config
+    - name: Copy admin.conf to zultahir's kube config
       ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
-        dest: "/home/{{ ansible_user }}/.kube/config"
+        dest: "/home/zultahir/.kube/config"
         remote_src: yes
-        owner: "{{ ansible_user }}"
-        group: "{{ ansible_user }}"
+        owner: zultahir
+        group: zultahir
         mode: '0600'
 
-    - name: Install Calico Pod network
-      become: false # Run as the user, not root, since we just set up kubeconfig
-      ansible.builtin.shell: |
-        kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
+    - name: Install Pod network (Calico)
+      become: false
+      ansible.builtin.command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
       args:
-        creates: "/home/{{ ansible_user }}/.kube/config"
+        creates: "/home/zultahir/.kube/config"
 
   handlers:
     - name: Restart containerd
