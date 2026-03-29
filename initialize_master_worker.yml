@@ -1,7 +1,7 @@
 ---
 # Node prep for Kubernetes (Ubuntu/Debian). Uses only ansible.builtin modules — no modprobe collection.
 #
-# Kernel prep is best-effort only (never fails the play). LXC often cannot modprobe; bridge sysctl may no-op.
+# Kernel prep is best-effort only (never fails the play). LXC: modprobe may fail; /etc may be read-only (modules-load.d skipped).
 # AWX: remove any extra var kubernetes_allow_restricted_node — it is no longer used. Sync this file from SCM.
 
 - name: Initialize master and worker nodes
@@ -27,6 +27,14 @@
       failed_when: false
       changed_when: false
 
+    - name: Ensure modules-load.d directory exists
+      ansible.builtin.file:
+        path: /etc/modules-load.d
+        state: directory
+        mode: "0755"
+      become: true
+      ignore_errors: true
+
     - name: Persist kernel modules on reboot
       ansible.builtin.copy:
         dest: /etc/modules-load.d/k8s.conf
@@ -34,6 +42,8 @@
           overlay
           br_netfilter
         mode: "0644"
+      become: true
+      ignore_errors: true
 
     - name: Sysctl bridge settings for Kubernetes (ignored if br_netfilter unavailable)
       ansible.builtin.sysctl:
