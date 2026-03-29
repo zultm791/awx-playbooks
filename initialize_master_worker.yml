@@ -1,92 +1,143 @@
 ---
+# Node prep for Kubernetes (Ubuntu/Debian). Uses only ansible.builtin modules — no modprobe collection.
+# Replace bare `modprobe:` with `ansible.builtin.command: modprobe ...` (ansible-core has no modprobe module).
+
 - name: Initialize master and worker nodes
   hosts: all
-  become: yes
+  become: true
+  vars:
+    kubernetes_version_short: "1.30"
+    kubernetes_apt_signed_by: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
   tasks:
     - name: Load required kernel modules
-      modprobe:
-        name: "{{ item }}"
-        state: present
+      ansible.builtin.command: modprobe {{ item }}
+      changed_when: false
       loop:
         - overlay
         - br_netfilter
 
     - name: Persist kernel modules on reboot
-      copy:
+      ansible.builtin.copy:
         dest: /etc/modules-load.d/k8s.conf
         content: |
           overlay
           br_netfilter
-        mode: '0644'
+        mode: "0644"
 
     - name: Configure sysctl for Kubernetes networking
-      sysctl:
+      ansible.builtin.sysctl:
         name: "{{ item }}"
-        value: '1'
+        value: "1"
         state: present
-        reload: yes
+        reload: true
       loop:
         - net.bridge.bridge-nf-call-iptables
         - net.bridge.bridge-nf-call-ip6tables
         - net.ipv4.ip_forward
 
     - name: Disable SWAP immediately
-      command: swapoff -a
-      ignore_errors: yes  # Prevents failure if swap is already off
+      ansible.builtin.command: swapoff -a
+      changed_when: false
+      failed_when: false
 
     - name: Disable SWAP in fstab
-      replace:
+      ansible.builtin.replace:
         path: /etc/fstab
-        regexp: '^([^#].*?\sswap\s+.*)$'
-        replace: '# \1'
+        regexp: "^([^#].*?\\sswap\\s+.*)$"
+        replace: "# \\1"
 
     - name: Install dependencies
-      apt:
-        name: [apt-transport-https, ca-certificates, curl, gnupg, software-properties-common]
+      ansible.builtin.apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - software-properties-common
         state: present
-        update_cache: yes
+        update_cache: true
 
     - name: Create keyring directory
-      file:
+      ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
-        mode: '0755'
+        mode: "0755"
 
-    - name: Add Docker GPG key
-      apt_key:
+    - name: Download Docker apt signing key
+      ansible.builtin.get_url:
         url: https://download.docker.com/linux/ubuntu/gpg
-        state: present
+        dest: /tmp/docker-archive-keyring.asc
+        mode: "0644"
 
-    - name: Add Docker Repository
-      apt_repository:
-        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    - name: Dearmor Docker apt key
+      ansible.builtin.command: gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker-archive-keyring.asc
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        filename: docker
         state: present
 
     - name: Install containerd
-      apt:
+      ansible.builtin.apt:
         name: containerd.io
         state: present
 
-    - name: Configure containerd
-      shell: |
-        mkdir -p /etc/containerd
-        containerd config default > /etc/containerd/config.toml
-        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
-      notify: restart containerd
+    - name: Ensure containerd config directory exists
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
 
-    - name: Add Kubernetes GPG key and Repo
-      shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
+    - name: Generate default containerd config
+      ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+      args:
+        creates: /etc/containerd/config.toml
+
+    - name: Use systemd cgroup driver in containerd
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: "SystemdCgroup = false"
+        replace: "SystemdCgroup = true"
+      notify: Restart containerd
+
+    - name: Download Kubernetes apt signing key
+      ansible.builtin.get_url:
+        url: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version_short }}/deb/Release.key"
+        dest: /tmp/kubernetes-release.key
+        mode: "0644"
+
+    - name: Dearmor Kubernetes apt key
+      ansible.builtin.command: gpg --dearmor -o {{ kubernetes_apt_signed_by }} /tmp/kubernetes-release.key
+      args:
+        creates: "{{ kubernetes_apt_signed_by }}"
+
+    - name: Add Kubernetes apt repository
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/kubernetes.list
+        content: |
+          deb [signed-by={{ kubernetes_apt_signed_by }}] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version_short }}/deb/ /
+        mode: "0644"
 
     - name: Install Kubernetes binaries
-      apt:
-        name: [kubelet, kubeadm, kubectl]
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
         state: present
-        update_cache: yes
+        update_cache: true
+
+    - name: Enable kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        enabled: true
+        state: started
 
   handlers:
-    - name: restart containerd
-      service:
+    - name: Restart containerd
+      ansible.builtin.service:
         name: containerd
         state: restarted
