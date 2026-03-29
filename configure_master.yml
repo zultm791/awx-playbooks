@@ -3,45 +3,66 @@
   hosts: master_setup_host
   become: true
   tasks:
-    - name: Nuclear Reset (Clean everything)
+    - name: Nuclear Reset (Clean everything from previous failed attempts)
       ansible.builtin.shell: |
         kubeadm reset -f
         systemctl stop kubelet
         systemctl stop containerd
-        # DELETE THE FAILED DATABASE DIRECTORY
         rm -rf /var/lib/etcd
         rm -rf /etc/kubernetes/manifests
         rm -rf /etc/cni/net.d
-        # Reset networking
+        rm -rf /var/lib/kubelet/*
         ip link delete cni0 || true
       failed_when: false
 
-    - name: Ensure kernel modules for K8s are loaded
+    - name: Load required kernel modules
       ansible.builtin.shell: |
         modprobe overlay
         modprobe br_netfilter
         echo -e "overlay\nbr_netfilter" > /etc/modules-load.d/k8s.conf
 
-    - name: Configure Containerd with SystemdCgroup
+    - name: Configure sysctl for Kubernetes networking
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+
+    - name: Apply sysctl params
+      ansible.builtin.command: sysctl --system
+
+    - name: Re-generate Fresh Containerd Config
       ansible.builtin.shell: |
         rm -f /etc/containerd/config.toml
         containerd config default > /etc/containerd/config.toml
         sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
       notify: Restart containerd
 
-    - name: Restart and Wait for Containerd
+    - name: Apply Containerd Restart
       ansible.builtin.meta: flush_handlers
 
-    - name: Initialize K8S cluster
+    - name: Initialize K8S cluster (The 8GB Power Move)
       ansible.builtin.command: >
         kubeadm init 
         --pod-network-cidr=172.16.0.0/16 
-        --apiserver-advertise-address=192.168.100.5 
+        --apiserver-advertise-address=192.168.0.102
         --ignore-preflight-errors=Mem
       register: kubeadm_init
+
+    - name: Setup kubeconfig for user zultahir
+      ansible.builtin.shell: |
+        mkdir -p /home/zultahir/.kube
+        cp -f /etc/kubernetes/admin.conf /home/zultahir/.kube/config
+        chown zultahir:zultahir /home/zultahir/.kube/config
+
+    - name: Install Pod network (Calico)
+      become: false
+      ansible.builtin.command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
 
   handlers:
     - name: Restart containerd
       ansible.builtin.systemd:
         name: containerd
         state: restarted
+        enabled: yes
