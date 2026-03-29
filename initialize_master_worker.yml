@@ -1,9 +1,6 @@
 ---
-# Node prep for Kubernetes (Ubuntu/Debian). Uses only ansible.builtin modules — no modprobe collection.
-#
-# Kernel prep is best-effort only (never fails the play). LXC: modprobe may fail; /etc may be read-only (modules-load.d skipped).
-# AWX: Enable privilege escalation on the Job Template. Remove ansible_become: false from Extra Variables (it overrides the play).
-# replace/copy under /etc need root; fstab step uses ignore_errors for read-only /etc (LXC).
+# Node prep for Kubernetes (Ubuntu/Debian). 
+# Top-level 'become: true' handles all permission requirements.
 
 - name: Initialize master and worker nodes
   hosts: all
@@ -11,7 +8,8 @@
   vars:
     kubernetes_version_short: "1.30"
     kubernetes_apt_signed_by: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
-     tasks:
+
+  tasks:
     - name: Check if kernel modules are visible in sysfs
       ansible.builtin.stat:
         path: "/sys/module/{{ item }}"
@@ -20,11 +18,10 @@
         - br_netfilter
       register: k8s_module_before
 
-    - name: Try modprobe when module not visible (ignore all errors)
-      ansible.builtin.command: modprobe {{ item.item }}
+    - name: Try modprobe when module not visible
+      ansible.builtin.command: "modprobe {{ item.item }}"
       loop: "{{ k8s_module_before.results }}"
       when: not item.stat.exists
-      become: true
       failed_when: false
       changed_when: false
 
@@ -33,7 +30,6 @@
         path: /etc/modules-load.d
         state: directory
         mode: "0755"
-      become: true
       ignore_errors: true
 
     - name: Persist kernel modules on reboot
@@ -43,10 +39,9 @@
           overlay
           br_netfilter
         mode: "0644"
-      become: true
       ignore_errors: true
 
-    - name: Persist sysctl snippet (skipped if /etc/sysctl.d not writable)
+    - name: Persist sysctl snippet
       ansible.builtin.copy:
         dest: /etc/sysctl.d/99-kubernetes-cri.conf
         content: |
@@ -54,33 +49,15 @@
           net.bridge.bridge-nf-call-ip6tables = 1
           net.ipv4.ip_forward                 = 1
         mode: "0644"
-      become: true
       ignore_errors: true
 
     - name: Reload sysctl from drop-ins
       ansible.builtin.command: sysctl --system
-      become: true
-      failed_when: false
-      changed_when: false
-
-    - name: Apply bridge sysctl at runtime (no root = skipped quietly)
-      ansible.builtin.command: sysctl -w {{ item }}=1
-      loop:
-        - net.bridge.bridge-nf-call-iptables
-        - net.bridge.bridge-nf-call-ip6tables
-      become: true
-      failed_when: false
-      changed_when: false
-
-    - name: Apply IP forward at runtime
-      ansible.builtin.command: sysctl -w net.ipv4.ip_forward=1
-      become: true
       failed_when: false
       changed_when: false
 
     - name: Disable SWAP immediately
       ansible.builtin.command: swapoff -a
-      become: true
       changed_when: false
       failed_when: false
 
@@ -89,7 +66,6 @@
         path: /etc/fstab
         regexp: "^([^#].*?\\sswap\\s+.*)$"
         replace: "# \\1"
-      become: true
       ignore_errors: true
 
     - name: Install dependencies
@@ -102,14 +78,12 @@
           - software-properties-common
         state: present
         update_cache: true
-      become: true
 
     - name: Create keyring directory
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: "0755"
-      become: true
 
     - name: Download Docker apt signing key
       ansible.builtin.get_url:
@@ -121,40 +95,34 @@
       ansible.builtin.command: gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker-archive-keyring.asc
       args:
         creates: /etc/apt/keyrings/docker.gpg
-      become: true
 
     - name: Add Docker repository
       ansible.builtin.apt_repository:
         repo: "deb [arch={{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         filename: docker
         state: present
-      become: true
 
     - name: Install containerd
       ansible.builtin.apt:
         name: containerd.io
         state: present
-      become: true
 
     - name: Ensure containerd config directory exists
       ansible.builtin.file:
         path: /etc/containerd
         state: directory
         mode: "0755"
-      become: true
 
     - name: Generate default containerd config
       ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
       args:
         creates: /etc/containerd/config.toml
-      become: true
 
     - name: Use systemd cgroup driver in containerd
       ansible.builtin.replace:
         path: /etc/containerd/config.toml
         regexp: "SystemdCgroup = false"
         replace: "SystemdCgroup = true"
-      become: true
       notify: Restart containerd
 
     - name: Download Kubernetes apt signing key
@@ -167,7 +135,6 @@
       ansible.builtin.command: gpg --dearmor -o {{ kubernetes_apt_signed_by }} /tmp/kubernetes-release.key
       args:
         creates: "{{ kubernetes_apt_signed_by }}"
-      become: true
 
     - name: Add Kubernetes apt repository
       ansible.builtin.copy:
@@ -175,7 +142,6 @@
         content: |
           deb [signed-by={{ kubernetes_apt_signed_by }}] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version_short }}/deb/ /
         mode: "0644"
-      become: true
 
     - name: Install Kubernetes binaries
       ansible.builtin.apt:
@@ -185,18 +151,15 @@
           - kubectl
         state: present
         update_cache: true
-      become: true
 
     - name: Enable kubelet
       ansible.builtin.systemd:
         name: kubelet
         enabled: true
         state: started
-      become: true
 
   handlers:
     - name: Restart containerd
       ansible.builtin.service:
         name: containerd
         state: restarted
-      become: true
