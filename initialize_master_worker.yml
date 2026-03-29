@@ -1,6 +1,10 @@
 ---
 # Node prep for Kubernetes (Ubuntu/Debian). Uses only ansible.builtin modules — no modprobe collection.
-# Replace bare `modprobe:` with `ansible.builtin.command: modprobe ...` (ansible-core has no modprobe module).
+#
+# modprobe may return "Operation not permitted" in LXC/unprivileged containers; many kernels already expose
+# overlay/br_netfilter (built-in). We try modprobe, then require /sys/module/<name> to exist.
+# AWX: sync this repo to the project; set Job Template path so ansible.cfg is used (silences Python discovery).
+# Python warning: project ansible.cfg uses interpreter_python=auto_silent, or set ansible_python_interpreter on hosts.
 
 - name: Initialize master and worker nodes
   hosts: all
@@ -8,13 +12,41 @@
   vars:
     kubernetes_version_short: "1.30"
     kubernetes_apt_signed_by: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
+    ansible_python_interpreter: /usr/bin/python3.12
   tasks:
-    - name: Load required kernel modules
-      ansible.builtin.command: modprobe {{ item }}
-      changed_when: false
+    - name: Check if kernel modules are visible in sysfs
+      ansible.builtin.stat:
+        path: "/sys/module/{{ item }}"
       loop:
         - overlay
         - br_netfilter
+      register: k8s_module_before
+
+    - name: Try modprobe when module not yet visible (ignore EPERM)
+      ansible.builtin.command: modprobe {{ item.item }}
+      loop: "{{ k8s_module_before.results }}"
+      when: not item.stat.exists
+      become: true
+      failed_when: false
+      changed_when: false
+      register: k8s_modprobe_attempt
+
+    - name: Verify kernel modules are available (built-in or loaded)
+      ansible.builtin.stat:
+        path: "/sys/module/{{ item }}"
+      loop:
+        - overlay
+        - br_netfilter
+      register: k8s_module_verify
+
+    - name: Fail if Kubernetes kernel modules are missing
+      ansible.builtin.fail:
+        msg: >-
+          Module {{ item.item }} is not present under /sys/module/.
+          modprobe often returns Operation not permitted inside unprivileged LXC/Docker.
+          Use KVM/VM or bare-metal nodes, a privileged container profile, or load these modules on the hypervisor.
+      loop: "{{ k8s_module_verify.results }}"
+      when: not item.stat.exists
 
     - name: Persist kernel modules on reboot
       ansible.builtin.copy:
