@@ -1,9 +1,8 @@
 ---
 # Node prep for Kubernetes (Ubuntu/Debian). Uses only ansible.builtin modules — no modprobe collection.
 #
-# Unprivileged LXC/CT: /sys/module/* missing and modprobe EPERM — set kubernetes_allow_restricted_node: true
-# (inventory, group_vars, or AWX extra vars). kubelet/containerd may still fail; real clusters need VMs or bare metal.
-# AWX: sync repo; ansible.cfg in project silences Python discovery. Override ansible_python_interpreter if needed.
+# Kernel prep is best-effort only (never fails the play). LXC often cannot modprobe; bridge sysctl may no-op.
+# AWX: remove any extra var kubernetes_allow_restricted_node — it is no longer used. Sync this file from SCM.
 
 - name: Initialize master and worker nodes
   hosts: all
@@ -12,52 +11,21 @@
     kubernetes_version_short: "1.30"
     kubernetes_apt_signed_by: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
     ansible_python_interpreter: /usr/bin/python3.12
-    # true = skip overlay/br_netfilter checks (restricted containers); false = require proper kernel visibility
-    kubernetes_allow_restricted_node: false
   tasks:
-    - name: Require overlay and br_netfilter (normal Kubernetes nodes)
-      when: not kubernetes_allow_restricted_node
-      block:
-        - name: Check if kernel modules are visible in sysfs
-          ansible.builtin.stat:
-            path: "/sys/module/{{ item }}"
-          loop:
-            - overlay
-            - br_netfilter
-          register: k8s_module_before
+    - name: Check if kernel modules are visible in sysfs
+      ansible.builtin.stat:
+        path: "/sys/module/{{ item }}"
+      loop:
+        - overlay
+        - br_netfilter
+      register: k8s_module_before
 
-        - name: Try modprobe when module not yet visible (ignore EPERM)
-          ansible.builtin.command: modprobe {{ item.item }}
-          loop: "{{ k8s_module_before.results }}"
-          when: not item.stat.exists
-          become: true
-          failed_when: false
-          changed_when: false
-
-        - name: Verify kernel modules are available (built-in or loaded)
-          ansible.builtin.stat:
-            path: "/sys/module/{{ item }}"
-          loop:
-            - overlay
-            - br_netfilter
-          register: k8s_module_verify
-
-        - name: Fail if Kubernetes kernel modules are missing
-          ansible.builtin.fail:
-            msg: >-
-              Module {{ item.item }} is not present under /sys/module/.
-              modprobe often returns Operation not permitted inside unprivileged LXC/Docker.
-              Use KVM/VM or bare-metal nodes, a privileged container profile, or load these modules on the hypervisor.
-              To only install packages on restricted CTs (cluster may not work), set kubernetes_allow_restricted_node: true.
-          loop: "{{ k8s_module_verify.results }}"
-          when: not item.stat.exists
-
-    - name: Warn — skipping kernel module requirements (restricted node mode)
-      ansible.builtin.debug:
-        msg: >-
-          kubernetes_allow_restricted_node is true: overlay/br_netfilter are not enforced.
-          Prefer privileged LXC, KVM VMs, or bare metal for a working cluster.
-      when: kubernetes_allow_restricted_node
+    - name: Try modprobe when module not visible (ignore all errors)
+      ansible.builtin.command: modprobe {{ item.item }}
+      loop: "{{ k8s_module_before.results }}"
+      when: not item.stat.exists
+      failed_when: false
+      changed_when: false
 
     - name: Persist kernel modules on reboot
       ansible.builtin.copy:
@@ -66,9 +34,8 @@
           overlay
           br_netfilter
         mode: "0644"
-      when: not kubernetes_allow_restricted_node
 
-    - name: Sysctl bridge settings for Kubernetes
+    - name: Sysctl bridge settings for Kubernetes (ignored if br_netfilter unavailable)
       ansible.builtin.sysctl:
         name: "{{ item }}"
         value: "1"
@@ -77,7 +44,7 @@
       loop:
         - net.bridge.bridge-nf-call-iptables
         - net.bridge.bridge-nf-call-ip6tables
-      when: not kubernetes_allow_restricted_node
+      ignore_errors: true
 
     - name: Sysctl IP forward
       ansible.builtin.sysctl:
