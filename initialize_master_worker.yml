@@ -2,8 +2,8 @@
 # Node prep for Kubernetes (Ubuntu/Debian). Uses only ansible.builtin modules — no modprobe collection.
 #
 # Kernel prep is best-effort only (never fails the play). LXC: modprobe may fail; /etc may be read-only (modules-load.d skipped).
-# AWX: Job Template must enable privilege escalation (become); otherwise sysctl cannot write under /etc.
-# Sysctl uses copy + sysctl(8) instead of the sysctl module (avoids temp files in /etc).
+# AWX: Enable privilege escalation on the Job Template. Remove ansible_become: false from Extra Variables (it overrides the play).
+# replace/copy under /etc need root; fstab step uses ignore_errors for read-only /etc (LXC).
 
 - name: Initialize master and worker nodes
   hosts: all
@@ -25,6 +25,7 @@
       ansible.builtin.command: modprobe {{ item.item }}
       loop: "{{ k8s_module_before.results }}"
       when: not item.stat.exists
+      become: true
       failed_when: false
       changed_when: false
 
@@ -80,6 +81,7 @@
 
     - name: Disable SWAP immediately
       ansible.builtin.command: swapoff -a
+      become: true
       changed_when: false
       failed_when: false
 
@@ -88,6 +90,8 @@
         path: /etc/fstab
         regexp: "^([^#].*?\\sswap\\s+.*)$"
         replace: "# \\1"
+      become: true
+      ignore_errors: true
 
     - name: Install dependencies
       ansible.builtin.apt:
@@ -99,12 +103,14 @@
           - software-properties-common
         state: present
         update_cache: true
+      become: true
 
     - name: Create keyring directory
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: "0755"
+      become: true
 
     - name: Download Docker apt signing key
       ansible.builtin.get_url:
@@ -116,34 +122,40 @@
       ansible.builtin.command: gpg --dearmor -o /etc/apt/keyrings/docker.gpg /tmp/docker-archive-keyring.asc
       args:
         creates: /etc/apt/keyrings/docker.gpg
+      become: true
 
     - name: Add Docker repository
       ansible.builtin.apt_repository:
         repo: "deb [arch={{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
         filename: docker
         state: present
+      become: true
 
     - name: Install containerd
       ansible.builtin.apt:
         name: containerd.io
         state: present
+      become: true
 
     - name: Ensure containerd config directory exists
       ansible.builtin.file:
         path: /etc/containerd
         state: directory
         mode: "0755"
+      become: true
 
     - name: Generate default containerd config
       ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
       args:
         creates: /etc/containerd/config.toml
+      become: true
 
     - name: Use systemd cgroup driver in containerd
       ansible.builtin.replace:
         path: /etc/containerd/config.toml
         regexp: "SystemdCgroup = false"
         replace: "SystemdCgroup = true"
+      become: true
       notify: Restart containerd
 
     - name: Download Kubernetes apt signing key
@@ -156,6 +168,7 @@
       ansible.builtin.command: gpg --dearmor -o {{ kubernetes_apt_signed_by }} /tmp/kubernetes-release.key
       args:
         creates: "{{ kubernetes_apt_signed_by }}"
+      become: true
 
     - name: Add Kubernetes apt repository
       ansible.builtin.copy:
@@ -163,6 +176,7 @@
         content: |
           deb [signed-by={{ kubernetes_apt_signed_by }}] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version_short }}/deb/ /
         mode: "0644"
+      become: true
 
     - name: Install Kubernetes binaries
       ansible.builtin.apt:
@@ -172,15 +186,18 @@
           - kubectl
         state: present
         update_cache: true
+      become: true
 
     - name: Enable kubelet
       ansible.builtin.systemd:
         name: kubelet
         enabled: true
         state: started
+      become: true
 
   handlers:
     - name: Restart containerd
       ansible.builtin.service:
         name: containerd
         state: restarted
+      become: true
