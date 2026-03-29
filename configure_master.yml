@@ -3,34 +3,36 @@
   hosts: master_setup_host
   become: true
   tasks:
-    - name: Nuclear Reset of Kubernetes and Containerd
+    - name: Nuclear Reset (Clean everything)
       ansible.builtin.shell: |
         kubeadm reset -f
         systemctl stop kubelet
         systemctl stop containerd
-        # Wipe all directories that hold state
+        # DELETE THE FAILED DATABASE DIRECTORY
         rm -rf /var/lib/etcd
-        rm -rf /var/lib/kubelet/*
-        rm -rf /etc/kubernetes/*
+        rm -rf /etc/kubernetes/manifests
         rm -rf /etc/cni/net.d
-        # Wipe networking interfaces that often hang
+        # Reset networking
         ip link delete cni0 || true
-        ip link delete flannel.1 || true
-        # Kill any zombie pods still lurking
-        ps -ef | grep -E 'kube-apiserver|etcd|kube-controller-manager|kube-scheduler' | awk '{print $2}' | xargs kill -9 || true
       failed_when: false
 
-    - name: Re-generate Fresh Containerd Config
+    - name: Ensure kernel modules for K8s are loaded
+      ansible.builtin.shell: |
+        modprobe overlay
+        modprobe br_netfilter
+        echo -e "overlay\nbr_netfilter" > /etc/modules-load.d/k8s.conf
+
+    - name: Configure Containerd with SystemdCgroup
       ansible.builtin.shell: |
         rm -f /etc/containerd/config.toml
         containerd config default > /etc/containerd/config.toml
         sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
       notify: Restart containerd
 
-    - name: Apply Containerd Restart
+    - name: Restart and Wait for Containerd
       ansible.builtin.meta: flush_handlers
 
-    - name: Initialize K8S cluster (The 8GB Power Move)
+    - name: Initialize K8S cluster
       ansible.builtin.command: >
         kubeadm init 
         --pod-network-cidr=172.16.0.0/16 
@@ -38,15 +40,8 @@
         --ignore-preflight-errors=Mem
       register: kubeadm_init
 
-    - name: Setup kubeconfig
-      ansible.builtin.shell: |
-        mkdir -p /home/zultahir/.kube
-        cp -f /etc/kubernetes/admin.conf /home/zultahir/.kube/config
-        chown zultahir:zultahir /home/zultahir/.kube/config
-
   handlers:
     - name: Restart containerd
       ansible.builtin.systemd:
         name: containerd
         state: restarted
-        enabled: yes
