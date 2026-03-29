@@ -3,41 +3,38 @@
   hosts: master_setup_host
   become: true
   tasks:
-    - name: Hard Reset Kubernetes
-      ansible.builtin.command: kubeadm reset -f
+    - name: Hard Reset Kubernetes and Containerd
+      ansible.builtin.shell: |
+        kubeadm reset -f
+        systemctl stop kubelet
+        systemctl stop containerd
+        rm -rf /var/lib/etcd
+        rm -rf /etc/kubernetes/manifests
+        rm -rf /etc/cni/net.d
       failed_when: false
 
-    - name: Clean up leftover networking and manifests
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/cni/net.d
-        - /var/lib/etcd
-        - /etc/kubernetes/manifests
-
-    - name: Force Containerd to use Systemd Cgroup
+    - name: Re-generate Fresh Containerd Config
       ansible.builtin.shell: |
-        mkdir -p /etc/containerd
+        rm -f /etc/containerd/config.toml
         containerd config default > /etc/containerd/config.toml
         sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
       notify: Restart containerd
 
-    - name: Restart containerd immediately
+    - name: Apply Containerd Restart
       ansible.builtin.meta: flush_handlers
 
-    - name: Initialize K8S cluster
+    - name: Initialize K8S cluster (Final Attempt)
       ansible.builtin.command: >
         kubeadm init 
         --pod-network-cidr=172.16.0.0/16 
-        --apiserver-advertise-address=192.168.100.5
+        --apiserver-advertise-address=192.168.100.5 
         --ignore-preflight-errors=Mem
       register: kubeadm_init
 
-    - name: Setup kubeconfig for zultahir
+    - name: Setup kubeconfig
       ansible.builtin.shell: |
         mkdir -p /home/zultahir/.kube
-        cp -i /etc/kubernetes/admin.conf /home/zultahir/.kube/config
+        cp -f /etc/kubernetes/admin.conf /home/zultahir/.kube/config
         chown zultahir:zultahir /home/zultahir/.kube/config
 
   handlers:
