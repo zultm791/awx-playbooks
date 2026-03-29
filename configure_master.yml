@@ -3,14 +3,21 @@
   hosts: master_setup_host
   become: true
   tasks:
-    - name: Hard Reset Kubernetes and Containerd
+    - name: Nuclear Reset of Kubernetes and Containerd
       ansible.builtin.shell: |
         kubeadm reset -f
         systemctl stop kubelet
         systemctl stop containerd
+        # Wipe all directories that hold state
         rm -rf /var/lib/etcd
-        rm -rf /etc/kubernetes/manifests
+        rm -rf /var/lib/kubelet/*
+        rm -rf /etc/kubernetes/*
         rm -rf /etc/cni/net.d
+        # Wipe networking interfaces that often hang
+        ip link delete cni0 || true
+        ip link delete flannel.1 || true
+        # Kill any zombie pods still lurking
+        ps -ef | grep -E 'kube-apiserver|etcd|kube-controller-manager|kube-scheduler' | awk '{print $2}' | xargs kill -9 || true
       failed_when: false
 
     - name: Re-generate Fresh Containerd Config
@@ -23,7 +30,7 @@
     - name: Apply Containerd Restart
       ansible.builtin.meta: flush_handlers
 
-    - name: Initialize K8S cluster (Final Attempt)
+    - name: Initialize K8S cluster (The 8GB Power Move)
       ansible.builtin.command: >
         kubeadm init 
         --pod-network-cidr=172.16.0.0/16 
