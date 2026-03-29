@@ -1,20 +1,58 @@
-
+---
 - name: Configuration of master node
   hosts: master_setup_host
+  become: true
   tasks:
-    - name: initialize K8S cluster
-      shell: kubeadm init --pod-network-cidr=172.16.0.0/16 --apiserver-advertise-address=192.168.100.5 --ignore-preflight-errors=all
+    - name: Reset Kubernetes (Clean up previous failed attempts)
+      ansible.builtin.command: kubeadm reset -f
+      register: reset_cluster
+      changed_when: reset_cluster.rc == 0
 
-    - name: create .kube directoryi and copy kube config file
-      shell: "{{ item }}"
-      loop:
-        -  mkdir -p $HOME/.kube
-        -  cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
-        - chown $(id -u):$(id -g) $HOME/.kube/config
+    - name: Ensure Containerd is configured for CRI v1
+      ansible.builtin.shell: |
+        mkdir -p /etc/containerd
+        containerd config default > /etc/containerd/config.toml
+        seed=$(grep -n "SystemdCgroup = false" /etc/containerd/config.toml | cut -d: -f1)
+        sed -i "${seed}s/false/true/" /etc/containerd/config.toml
+      notify: Restart containerd
 
-    - name: install Pod network
-      become: yes
-      shell: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml >> pod_network_setup.txt
+    - name: Flush handlers to restart containerd immediately
+      ansible.builtin.meta: flush_handlers
+
+    - name: Initialize K8S cluster
+      ansible.builtin.command: >
+        kubeadm init 
+        --pod-network-cidr=172.16.0.0/16 
+        --apiserver-advertise-address=192.168.100.5 
+        --ignore-preflight-errors=Mem,FileAvailable--etc-kubernetes-manifests-kube-apiserver.yaml
+      register: kubeadm_init
+
+    - name: Setup kubeconfig for the user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Copy admin.conf to user's kube config
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        remote_src: yes
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0600'
+
+    - name: Install Calico Pod network
+      become: false # Run as the user, not root, since we just set up kubeconfig
+      ansible.builtin.shell: |
+        kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/calico.yaml
       args:
-        chdir: $HOME
-        creates: pod_network_setup.txt
+        creates: "/home/{{ ansible_user }}/.kube/config"
+
+  handlers:
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
