@@ -11,8 +11,7 @@
   vars:
     kubernetes_version_short: "1.30"
     kubernetes_apt_signed_by: "/etc/apt/keyrings/kubernetes-apt-keyring.gpg"
-    ansible_python_interpreter: /usr/bin/python3.12
-  tasks:
+     tasks:
     - name: Check if kernel modules are visible in sysfs
       ansible.builtin.stat:
         path: "/sys/module/{{ item }}"
