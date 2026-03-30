@@ -1,7 +1,7 @@
 ---
 # playbook: join-workers.yml
 # Join worker nodes to the Kubernetes cluster
-- hosts: worker_joint_iventory
+- hosts: all
   become: true
 
   tasks:
