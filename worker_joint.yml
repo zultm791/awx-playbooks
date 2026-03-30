@@ -1,16 +1,19 @@
 ---
-# playbook: join-workers.yml
-# Join worker nodes to the Kubernetes cluster
-- hosts: all
+- name: Join Worker Nodes to Cluster
+  hosts: all
   become: true
-
   tasks:
-    - name: Check if node is already joined
-      ansible.builtin.stat:
-        path: /etc/kubernetes/kubelet.conf
-      register: kubelet_conf
+    - name: Reset any previous join attempts
+      ansible.builtin.command: kubeadm reset -f
+      failed_when: false
 
     - name: Join the Kubernetes cluster
-      ansible.builtin.command:
-        cmd: "{{ hostvars[groups['k8s_masters'][0]].k8s_join_command }}"
-      when: not kubelet_conf.stat.exists
+      ansible.builtin.command: >
+        kubeadm join 192.168.0.102:6443 
+        --token 9gd4uh.2zpm9l2n2ghgpbb6 
+        --discovery-token-ca-cert-hash sha256:6bf6df19694e693e733a3014f8515537e625e1df44262447a8fa80af3f366bf6
+      register: join_result
+
+    - name: Show join output
+      ansible.builtin.debug:
+        var: join_result.stdout
