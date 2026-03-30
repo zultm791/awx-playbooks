@@ -3,17 +3,35 @@
   hosts: all
   become: true
   tasks:
-    - name: Reset any previous join attempts
+    - name: Reset previous join attempts
       ansible.builtin.command: kubeadm reset -f
       failed_when: false
+
+    - name: Load required kernel modules
+      ansible.builtin.shell: |
+        modprobe overlay
+        modprobe br_netfilter
+        echo -e "overlay\nbr_netfilter" > /etc/modules-load.d/k8s.conf
+
+    - name: Re-generate Fresh Containerd Config (Fixes CRI v1 error)
+      ansible.builtin.shell: |
+        rm -f /etc/containerd/config.toml
+        containerd config default > /etc/containerd/config.toml
+        sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
+      notify: Restart containerd
+
+    - name: Apply Containerd Restart
+      ansible.builtin.meta: flush_handlers
 
     - name: Join the Kubernetes cluster
       ansible.builtin.command: >
         kubeadm join 192.168.0.102:6443 
         --token 9gd4uh.2zpm9l2n2ghgpbb6 
         --discovery-token-ca-cert-hash sha256:6bf6df19694e693e733a3014f8515537e625e1df44262447a8fa80af3f366bf6
-      register: join_result
 
-    - name: Show join output
-      ansible.builtin.debug:
-        var: join_result.stdout
+  handlers:
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+        enabled: yes
