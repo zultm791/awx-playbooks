@@ -1,0 +1,51 @@
+---
+- name: Deploy Apache Cluster to Kubernetes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Create Apache Deployment
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: apache-deployment
+            namespace: default
+            labels:
+              app: apache-cluster
+          spec:
+            replicas: 3  # This creates your "cluster" of 3 nodes
+            selector:
+              matchLabels:
+                app: apache-server
+            template:
+              metadata:
+                labels:
+                  app: apache-server
+              spec:
+                containers:
+                - name: apache-container
+                  image: httpd:latest
+                  ports:
+                  - containerPort: 80
+
+    - name: Create Apache Service
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: apache-service
+            namespace: default
+          spec:
+            selector:
+              app: apache-server
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 80
+            type: LoadBalancer # Use NodePort if you don't have a LoadBalancer provider
