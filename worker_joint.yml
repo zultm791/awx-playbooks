@@ -3,40 +3,45 @@
   hosts: all
   become: true
   tasks:
-    - name: Reset previous join attempts
-      ansible.builtin.command: kubeadm reset -f
+    - name: Complete Worker Cleanup
+      ansible.builtin.shell: |
+        kubeadm reset -f
+        systemctl stop kubelet
+        systemctl stop containerd
+        rm -rf /etc/cni/net.d /var/lib/kubelet/* /etc/kubernetes/*
+        # Ensure bridge modules are active
+        modprobe br_netfilter
+        sysctl -w net.ipv4.ip_forward=1
       failed_when: false
 
-    - name: Load required kernel modules
-      ansible.builtin.shell: |
-        modprobe overlay
-        modprobe br_netfilter
-        echo -e "overlay\nbr_netfilter" > /etc/modules-load.d/k8s.conf
-
-    - name: Re-generate Fresh Containerd Config
+    - name: Refresh Containerd Config
       ansible.builtin.shell: |
         rm -f /etc/containerd/config.toml
         containerd config default > /etc/containerd/config.toml
         sed -i 's/SystemdCgroup = false/SystemdCgroup = true/g' /etc/containerd/config.toml
       notify: Restart containerd
 
-    - name: Apply Containerd Restart
+    - name: Flush Handlers
       ansible.builtin.meta: flush_handlers
 
-    - name: Wait for Containerd socket to stabilize
+    - name: Wait for Runtime
       ansible.builtin.pause:
-        seconds: 10
+        seconds: 15
 
-    - name: Join the Kubernetes cluster
+    - name: Join Cluster with Verbose Logging
       ansible.builtin.command: >
         kubeadm join 192.168.0.102:6443 
-        --token 9gd4uh.2zpm9l2n2ghgpbb6 
-        --discovery-token-ca-cert-hash sha256:6bf6df19694e693e733a3014f8515537e625e1df44262447a8fa80af3f366bf6
-        --ignore-preflight-errors=all
+        --token <PUT_NEW_TOKEN_HERE> 
+        --discovery-token-ca-cert-hash sha256:<PUT_NEW_HASH_HERE>
+        --v=5
+      register: join_out
+
+    - name: Debug Join Output
+      ansible.builtin.debug:
+        var: join_out.stdout_lines
 
   handlers:
     - name: Restart containerd
       ansible.builtin.systemd:
         name: containerd
         state: restarted
-        enabled: yes
